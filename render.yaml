@@ -1,0 +1,6 @@
+services:
+  - type: web
+    name: flask-nav-app
+    env: python
+    buildCommand: ""
+    startCommand: gunicorn app:app
