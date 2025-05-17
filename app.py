@@ -2,13 +2,12 @@ from flask import Flask, request, jsonify, render_template_string, send_file
 import requests
 import io
 from urllib.parse import quote_plus
-import socket
 import re
 from geopy.distance import geodesic
 
 app = Flask(__name__)
 
-GOOGLE_MAPS_API_KEY = 'AIzaSyDZuZ1sMCSJSyC_u-rbzHC8BvbIyzAgL3M' 
+GOOGLE_MAPS_API_KEY = 'AIzaSyDZuZ1sMCSJSyC_u-rbzHC8BvbIyzAgL3M'
 MAP_WIDTH = 320
 MAP_HEIGHT = 240
 
@@ -88,18 +87,29 @@ def index():
             function startSendingLocation() {
                 if (navigator.geolocation) {
                     navigator.geolocation.watchPosition(position => {
+                        const lat = position.coords.latitude;
+                        const lng = position.coords.longitude;
+                        const accuracy = position.coords.accuracy;
+
+                        console.log("Latitude:", lat);
+                        console.log("Longitude:", lng);
+                        console.log("Accuracy (meters):", accuracy);
+
+                        if (accuracy > 100) {
+                            alert("⚠️ Your location accuracy is low. Try going outside or enabling High Accuracy in Location settings.");
+                        }
+
                         fetch('/update_location', {
                             method: 'POST',
-                            headers: {'Content-Type': 'application/json'},
-                            body: JSON.stringify({
-                                lat: position.coords.latitude,
-                                lng: position.coords.longitude
-                            })
-                        }).then(res => res.json())
-                          .then(data => console.log(data))
-                          .catch(err => console.error('Error sending location:', err));
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ lat: lat, lng: lng })
+                        })
+                        .then(res => res.json())
+                        .then(data => console.log(data))
+                        .catch(err => console.error('Error sending location:', err));
                     }, error => {
-                        console.error("Geolocation error:", error);
+                        console.error("Geolocation error:", error.message);
+                        alert("⚠️ Location error: " + error.message);
                     }, {
                         enableHighAccuracy: true,
                         maximumAge: 0,
@@ -114,7 +124,7 @@ def index():
         <body onload="startSendingLocation()">
             <h2>Start Navigation</h2>
             <form method="POST">
-                <p>Origin will be set from your GPS automatically.</p>
+                <p>📍 Origin will be auto-set from your current GPS location.</p>
                 Destination: <input name="destination" required><br><br>
                 <input type="submit" value="Start Navigation">
             </form>
@@ -133,7 +143,7 @@ def update_location():
     new_origin = f"{lat},{lng}"
     origin_changed = (current_route['origin'] != new_origin)
     current_route['origin'] = new_origin
-    print(f"Received GPS location: {new_origin}")
+    print(f"📡 Received GPS location: {new_origin}")
 
     if current_route['steps']:
         current_step = current_route['steps'][current_route['step_index']]
@@ -146,14 +156,14 @@ def update_location():
         if distance < THRESHOLD_METERS:
             if current_route['step_index'] < len(current_route['steps']) - 1:
                 current_route['step_index'] += 1
-                print(f"Automatically advanced to step {current_route['step_index']}")
+                print(f"✅ Advanced to step {current_route['step_index']}")
 
     if current_route['destination'] and origin_changed:
         success = update_route(new_origin, current_route['destination'])
         if success:
-            print("Route updated dynamically with new origin.")
+            print("🔄 Route updated dynamically.")
         else:
-            print("Failed to update route dynamically.")
+            print("⚠️ Failed to update route.")
 
     return jsonify({'status': 'Location updated'}), 200
 
@@ -215,4 +225,3 @@ def reset():
     current_route['step_index'] = 0
     current_route['polyline'] = ''
     return "Route reset."
-
