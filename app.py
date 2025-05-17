@@ -84,47 +84,72 @@ def index():
         <html>
         <head>
             <script>
-            function startSendingLocation() {
-                if (navigator.geolocation) {
-                    navigator.geolocation.watchPosition(position => {
-                        const lat = position.coords.latitude;
-                        const lng = position.coords.longitude;
-                        const accuracy = position.coords.accuracy;
+            function sendLocation(lat, lng, accuracy, method) {
+              fetch('/update_location', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                  lat: lat,
+                  lng: lng,
+                  accuracy: accuracy,
+                  method: method
+                })
+              }).then(res => res.json()).then(console.log);
+            }
 
-                        console.log("Latitude:", lat);
-                        console.log("Longitude:", lng);
-                        console.log("Accuracy (meters):", accuracy);
+            function fallbackToGoogleGeoAPI() {
+              fetch('/get_fallback_location')
+                .then(res => res.json())
+                .then(data => {
+                  if (data.lat && data.lng) {
+                    sendLocation(data.lat, data.lng, data.accuracy, "google_api");
+                  } else {
+                    console.error("Google fallback failed.");
+                  }
+                });
+            }
 
-                        if (accuracy > 100) {
-                            alert("⚠️ Your location accuracy is low. Try going outside or enabling High Accuracy in Location settings.");
-                        }
-
-                        fetch('/update_location', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ lat: lat, lng: lng })
-                        })
-                        .then(res => res.json())
-                        .then(data => console.log(data))
-                        .catch(err => console.error('Error sending location:', err));
-                    }, error => {
-                        console.error("Geolocation error:", error.message);
-                        alert("⚠️ Location error: " + error.message);
-                    }, {
-                        enableHighAccuracy: true,
-                        maximumAge: 0,
-                        timeout: 10000
-                    });
-                } else {
-                    alert("Geolocation not supported by your browser");
-                }
+            function startGettingLocation() {
+              if (navigator.geolocation) {
+                navigator.geolocation.getCurrentPosition(
+                  pos => {
+                    if (pos.coords.accuracy > 50) {
+                      console.warn("Low GPS accuracy. Falling back.");
+                      fallbackToGoogleGeoAPI();
+                    } else {
+                      sendLocation(pos.coords.latitude, pos.coords.longitude, pos.coords.accuracy, "browser_gps");
+                    }
+                  },
+                  err => {
+                    console.error("GPS failed:", err);
+                    fallbackToGoogleGeoAPI();
+                  },
+                  {
+                    enableHighAccuracy: true,
+                    timeout: 10000,
+                    maximumAge: 0
+                  }
+                );
+                // Also watch position to update dynamically
+                navigator.geolocation.watchPosition(position => {
+                    sendLocation(position.coords.latitude, position.coords.longitude, position.coords.accuracy, "browser_gps_watch");
+                }, err => {
+                    console.error("Watch position error:", err);
+                }, {
+                    enableHighAccuracy: true,
+                    timeout: 10000,
+                    maximumAge: 0
+                });
+              } else {
+                alert("Geolocation not supported by your browser");
+              }
             }
             </script>
         </head>
-        <body onload="startSendingLocation()">
+        <body onload="startGettingLocation()">
             <h2>Start Navigation</h2>
             <form method="POST">
-                <p>📍 Origin will be auto-set from your current GPS location.</p>
+                <p>Origin will be set from your GPS automatically.</p>
                 Destination: <input name="destination" required><br><br>
                 <input type="submit" value="Start Navigation">
             </form>
@@ -137,13 +162,17 @@ def update_location():
     data = request.get_json()
     lat = data.get('lat')
     lng = data.get('lng')
+    accuracy = data.get('accuracy', 'unknown')
+    method = data.get('method', 'unknown')
+
     if lat is None or lng is None:
         return jsonify({'error': 'Invalid data, lat and lng required'}), 400
 
     new_origin = f"{lat},{lng}"
     origin_changed = (current_route['origin'] != new_origin)
     current_route['origin'] = new_origin
-    print(f"📡 Received GPS location: {new_origin}")
+
+    print(f"[{method.upper()}] Location: {new_origin} (Accuracy: {accuracy}m)")
 
     if current_route['steps']:
         current_step = current_route['steps'][current_route['step_index']]
@@ -156,16 +185,34 @@ def update_location():
         if distance < THRESHOLD_METERS:
             if current_route['step_index'] < len(current_route['steps']) - 1:
                 current_route['step_index'] += 1
-                print(f"✅ Advanced to step {current_route['step_index']}")
+                print(f"Automatically advanced to step {current_route['step_index']}")
 
-    if current_route['destination'] and origin_changed:
+    if current_route['destination'] and origin_changed and method != "browser_gps_watch":
         success = update_route(new_origin, current_route['destination'])
         if success:
-            print("🔄 Route updated dynamically.")
+            print("Route updated dynamically with new origin.")
         else:
-            print("⚠️ Failed to update route.")
+            print("Failed to update route dynamically.")
 
-    return jsonify({'status': 'Location updated'}), 200
+    return jsonify({'status': 'Location updated', 'method': method}), 200
+
+@app.route('/get_fallback_location')
+def get_fallback_location():
+    geo_api_url = f"https://www.googleapis.com/geolocation/v1/geolocate?key={GOOGLE_MAPS_API_KEY}"
+    try:
+        response = requests.post(geo_api_url, json={"considerIp": True})
+        if response.status_code == 200:
+            data = response.json()
+            return jsonify({
+                'lat': data['location']['lat'],
+                'lng': data['location']['lng'],
+                'accuracy': data['accuracy']
+            })
+        else:
+            return jsonify({'error': 'Google API error'}), 500
+    except Exception as e:
+        print("Error in geolocation fallback:", e)
+        return jsonify({'error': 'Exception occurred'}), 500
 
 @app.route('/map/<int:step>')
 def step_map(step):
@@ -225,3 +272,6 @@ def reset():
     current_route['step_index'] = 0
     current_route['polyline'] = ''
     return "Route reset."
+
+if __name__ == "__main__":
+    app.run(debug=True)
